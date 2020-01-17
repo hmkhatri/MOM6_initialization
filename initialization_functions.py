@@ -12,7 +12,7 @@ Set of functions to calculate input files for MOM6.
 import xarray as xr
 import numpy as np
 
-def calc_XYmeters(grid):
+def calc_XYmeters(grid,center_x=True):
     '''Calculate the locations of each T point in [grid] in units of meters'''
     Xval = np.append(np.zeros(shape=(grid['lath'].size,1)),
                      grid['dxT'].cumsum('lonh').values,
@@ -25,6 +25,9 @@ def calc_XYmeters(grid):
     X = xr.DataArray(Xval,dims=['lath','lonh'],coords={'lath':grid['lath'],'lonh':grid['lonh']})
     Y = xr.DataArray(Yval,dims=['lath','lonh'],coords={'lath':grid['lath'],'lonh':grid['lonh']})
     
+    if center_x:
+        X = X - X.mean(dim='lonh')
+        
     return X,Y
 
 def calc_vgrid(nk,max_depth,min_depth=0,thkcello_topcell=1,method='powerlaw'):
@@ -64,22 +67,28 @@ def calc_vgrid(nk,max_depth,min_depth=0,thkcello_topcell=1,method='powerlaw'):
     
     return vgrid
 
-def def_sponge_dampingtimescale_north(hgrid,sponge_width,idampval):
+def def_sponge_dampingtimescale_north(Y,sponge_width,idampval):
     '''Define a sponge grid at the north of the domain based on horizontal grid shape.
     hgrid is the horizontal grid dataset
     sponge_width is the degrees of lat to damp over [must be a list, progressively decreasing in width]
     idampval is the inverse damping rate (in s-1) [must be a list] '''
-    idamp = xr.zeros_like(hgrid['geolat'])
+    idamp = xr.zeros_like(Y)
     for i in range(len(sponge_width)):
-        sponge_region = hgrid['geolat']>hgrid['geolat'].max(xr.ALL_DIMS)-sponge_width[i]
-        idamp=idamp+xr.zeros_like(hgrid['geolat']).where(~sponge_region,idampval[i])
+        sponge_region = Y>Y.max(xr.ALL_DIMS)-sponge_width[i]
+        idamp=idamp+xr.zeros_like(Y).where(~sponge_region,idampval[i])
     return idamp
 
-def def_sponge_interfaceheight(vgrid,hgrid):
+def def_sponge_interfaceheight(vgrid,Y):
     '''Define a 3D array of layer interface heights (eta), to which sponge will relax.'''
-    eta = xr.DataArray(-vgrid['zw'],coords=[vgrid['zw']],dims='depthe')
-    eta = eta*xr.ones_like(hgrid['D'])
+    eta = xr.DataArray(-vgrid['zw'],coords=[vgrid['zw']],dims='NKp1')
+    eta = eta*xr.ones_like(Y)
     return eta
+
+def make_zeroinsponge(variable,Y,sponge_width_max):
+    '''Set the given variable to zero in the sponge'''
+    sponge_region = (Y>Y.max(xr.ALL_DIMS)-sponge_width_max)
+    variable_new = variable.where(~sponge_region,0)
+    return variable_new
 
 def calc_distribution(coordinate,function,**kwargs):
     '''Calculate the distribution of a variable, based on a given coordinate
@@ -91,11 +100,35 @@ def calc_distribution(coordinate,function,**kwargs):
         Independent variable required for functions can be passed at the end of the function
     '''
     if function=='linear':
-        
-        A = (val_at_maxcoord-val_at_mincoord)/(coordinate.max(xr.ALL_DIMS)-coordinate.min(xr.ALL_DIMS))
-        B = val_at_mincoord - coordinate.min(xr.ALL_DIMS)*A
+        A = (kwargs["val_at_maxcoord"]-kwargs["val_at_mincoord"])/(coordinate.max(xr.ALL_DIMS)-coordinate.min(xr.ALL_DIMS))
+        B = kwargs["val_at_mincoord"] - coordinate.min(xr.ALL_DIMS)*A
         distribution = A*coordinate+B
     
-#     if function=='exponential':
+    if function=='exponential':
+        distribution = kwargs["val_at_maxcoord"]*np.exp(coordinate/kwargs["efolding"])
         
-#     return distribution
+    if function=='gaussian':
+        distribution = np.exp(-np.power(coordinate - kwargs["center"], 2.) / (2 * np.power(kwargs["width"], 2.)))
+    
+    if function=='uniform':
+        distribution = kwargs["uniform_value"]*xr.ones_like(coordinate)
+        
+    return distribution
+
+def calc_forcing_zonaluniform(Y,function,**kwargs):
+    '''Define zonally uniform forcing with a particular shape defined by function'''
+    if function=='doublesinusoid_squared':
+        domain_width = Y.max(xr.ALL_DIMS)-Y.min(xr.ALL_DIMS)
+        north_width = domain_width-kwargs["sponge_width_max"]-kwargs["northsouth_boundary"]
+        south_width = kwargs["northsouth_boundary"]-kwargs["south_zeroregion"]
+        
+        condition_north = (Y>=kwargs["northsouth_boundary"]) & (Y<=domain_width-kwargs["sponge_width_max"]) 
+        forcing = (kwargs["max_north"]*np.sin(np.pi*(Y-kwargs["northsouth_boundary"])/north_width)**2).where(condition_north,0)
+        
+        condition_south = (Y>=kwargs["south_zeroregion"]) & (Y<=kwargs["northsouth_boundary"])
+        forcing = (-kwargs["max_south"]*np.sin(np.pi*(Y-kwargs["south_zeroregion"])/south_width)**2).where(condition_south,0) + forcing
+    
+    if function=='uniform':
+        forcing = kwargs["uniform_value"]*xr.ones_like(Y)
+        
+    return forcing
