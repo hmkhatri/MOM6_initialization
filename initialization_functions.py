@@ -24,10 +24,10 @@ def calc_XYmeters(grid,center_x=True):
     Yval = 0.5*(Yval[:-1,:]+Yval[1:,:])
     X = xr.DataArray(Xval,dims=['lath','lonh'],coords={'lath':grid['lath'],'lonh':grid['lonh']})
     Y = xr.DataArray(Yval,dims=['lath','lonh'],coords={'lath':grid['lath'],'lonh':grid['lonh']})
-    
+
     if center_x:
         X = X - X.mean(dim='lonh')
-        
+
     return X,Y
 
 def calc_vgrid(nk,max_depth,min_depth=0,thkcello_topcell=1,method='powerlaw'):
@@ -45,10 +45,10 @@ def calc_vgrid(nk,max_depth,min_depth=0,thkcello_topcell=1,method='powerlaw'):
         zw = np.linspace(z0,H,nk)
     elif method=='exponential':
         zw = z0*np.exp(np.log(H/z0)*(k/(nk)))
-        
+
     # Add the free surface, z*=0, as an interface (saved until this point as z0=0 messes with power law scaling)
     zw = np.append(0,zw)
-    
+
     # Central point is THICKNESS location
     zt = (zw[1:] + zw[:-1]) / 2
 
@@ -64,7 +64,7 @@ def calc_vgrid(nk,max_depth,min_depth=0,thkcello_topcell=1,method='powerlaw'):
     zt.name='zt'
     dz.name='dz'
     vgrid = xr.merge([zw,zt,dz])
-    
+
     return vgrid
 
 def def_sponge_dampingtimescale_north(Y,sponge_width,idampval):
@@ -103,16 +103,16 @@ def calc_distribution(coordinate,function,**kwargs):
         A = (kwargs["val_at_maxcoord"]-kwargs["val_at_mincoord"])/(coordinate.max(xr.ALL_DIMS)-coordinate.min(xr.ALL_DIMS))
         B = kwargs["val_at_mincoord"] - coordinate.min(xr.ALL_DIMS)*A
         distribution = A*coordinate+B
-    
+
     if function=='exponential':
         distribution = kwargs["val_at_maxcoord"]*np.exp(coordinate/kwargs["efolding"])
-        
+
     if function=='gaussian':
         distribution = np.exp(-np.power(coordinate - kwargs["center"], 2.) / (2 * np.power(kwargs["width"], 2.)))
-    
+
     if function=='uniform':
         distribution = kwargs["uniform_value"]*xr.ones_like(coordinate)
-        
+
     return distribution
 
 def calc_forcing_zonaluniform(Y,function,**kwargs):
@@ -121,14 +121,25 @@ def calc_forcing_zonaluniform(Y,function,**kwargs):
         domain_width = Y.max(xr.ALL_DIMS)-Y.min(xr.ALL_DIMS)
         north_width = domain_width-kwargs["sponge_width_max"]-kwargs["northsouth_boundary"]
         south_width = kwargs["northsouth_boundary"]-kwargs["south_zeroregion"]
-        
-        condition_north = (Y>=kwargs["northsouth_boundary"]) & (Y<=domain_width-kwargs["sponge_width_max"]) 
+
+        condition_north = (Y>=kwargs["northsouth_boundary"]) & (Y<=domain_width-kwargs["sponge_width_max"])
         forcing = (kwargs["max_north"]*np.sin(np.pi*(Y-kwargs["northsouth_boundary"])/north_width)**2).where(condition_north,0)
-        
+
         condition_south = (Y>=kwargs["south_zeroregion"]) & (Y<=kwargs["northsouth_boundary"])
         forcing = (-kwargs["max_south"]*np.sin(np.pi*(Y-kwargs["south_zeroregion"])/south_width)**2).where(condition_south,0) + forcing
-    
+
+    if function=='doublesinusoid':
+        domain_width = Y.max(xr.ALL_DIMS)-Y.min(xr.ALL_DIMS)
+        north_width = domain_width-kwargs["sponge_width_max"]-kwargs["northsouth_boundary"]
+        south_width = kwargs["northsouth_boundary"]-kwargs["south_zeroregion"]
+
+        condition_north = (Y>=kwargs["northsouth_boundary"]) & (Y<=domain_width-kwargs["sponge_width_max"])
+        forcing = (kwargs["max_north"]*np.sin(np.pi*(Y-kwargs["northsouth_boundary"])/north_width)).where(condition_north,0)
+
+        condition_south = (Y>=kwargs["south_zeroregion"]) & (Y<=kwargs["northsouth_boundary"])
+        forcing = (-kwargs["max_south"]*np.sin(np.pi*(Y-kwargs["south_zeroregion"])/south_width)).where(condition_south,0) + forcing
+
     if function=='uniform':
         forcing = kwargs["uniform_value"]*xr.ones_like(Y)
-        
+
     return forcing
